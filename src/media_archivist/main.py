@@ -32,15 +32,20 @@ def start(directories: List[str] = typer.Argument(..., help="List of directories
 
 @app.command()
 def cleanup(
-    dry_run: bool = typer.Option(True, "--no-dry-run", help="Actually delete files. Default is dry-run."),
+    no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually delete files. If not set, only a preview is shown."),
     force: bool = typer.Option(False, "--force", "-f", help="Force deletion without confirmation.")
 ):
     """
     Automatically delete duplicates, keeping the version with the shortest path.
     """
     init_db()
-    if dry_run:
-        print("--- DRY RUN MODE (No files will be deleted) ---")
+    is_dry_run = not no_dry_run
+    
+    if is_dry_run:
+        print("--- PREVIEW MODE (DRY RUN) ---")
+        print("To actually delete files, use: sudo .venv/bin/archivist cleanup --no-dry-run")
+    else:
+        print("--- ACTUAL DELETION MODE ---")
     
     with Session(engine) as session:
         # Find hashes with more than 1 occurrence
@@ -53,7 +58,7 @@ def cleanup(
         duplicate_hashes = session.exec(statement).all()
         
         if not duplicate_hashes:
-            print("No duplicates found.")
+            print("No duplicates found in the database.")
             return
 
         total_to_delete = 0
@@ -76,27 +81,29 @@ def cleanup(
                 total_to_delete += 1
                 total_saved_space += df.file_size
                 
-                if not dry_run:
+                if not is_dry_run:
                     if not force:
-                        confirm = typer.confirm(f"Delete {df.abs_path}?")
+                        confirm = typer.confirm(f"Are you sure you want to delete {df.abs_path}?")
                         if not confirm:
+                            print("    - Skipped.")
                             continue
                     
                     try:
-                        os.remove(df.abs_path)
-                        session.delete(df)
-                        print(f"    - Deleted.")
+                        if os.path.exists(df.abs_path):
+                            os.remove(df.abs_path)
+                            session.delete(df)
+                            print(f"    - Deleted successfully.")
+                        else:
+                            print(f"    - File already missing from disk, removing from DB.")
+                            session.delete(df)
                     except Exception as e:
                         print(f"    - Error deleting {df.abs_path}: {e}")
             
             session.commit()
 
         print(f"\nSummary:")
-        print(f"  Total files to delete: {total_to_delete}")
+        print(f"  Total files processed for deletion: {total_to_delete}")
         print(f"  Estimated space to save: {total_saved_space / (1024*1024):.2f} MB")
-        
-        if dry_run:
-            print("\nTo actually delete these files, run: sudo uv run archivist cleanup --no-dry-run")
 
 @app.command()
 def web(host: str = "0.0.0.0", port: int = 8000):
