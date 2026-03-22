@@ -71,7 +71,7 @@ def doctor(
     no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually remove orphaned records. Default is preview."),
 ):
     """
-    Health check: Find and remove database records for files that no longer exist on disk.
+    Health check: Find orphaned records and reset stuck hashing tasks.
     """
     init_db()
     is_dry_run = not no_dry_run
@@ -86,173 +86,39 @@ def doctor(
         if not all_records:
             print("Database is empty.")
             return
+
         orphaned_count = 0
+        stuck_count = 0
+        
         for record in all_records:
+            # 1. Check for orphaned records (File missing on disk)
             if not os.path.exists(record.abs_path):
                 print(f"  [ORPHANED] {record.abs_path}")
                 orphaned_count += 1
                 if not is_dry_run:
                     session.delete(record)
+            
+            # 2. Check for stuck 'hashing' status
+            elif record.status == "hashing":
+                print(f"  [STUCK] {record.abs_path} (Resetting to pending)")
+                stuck_count += 1
+                if not is_dry_run:
+                    record.status = "pending"
+                    session.add(record)
+        
         if not is_dry_run:
             session.commit()
-            print(f"\nSuccessfully removed {orphaned_count} orphaned records.")
+            print(f"\nSummary: Removed {orphaned_count} orphans, Reset {stuck_count} stuck tasks.")
         else:
-            print(f"\nFound {orphaned_count} orphaned records to remove.")
+            print(f"\nSummary: Found {orphaned_count} orphans and {stuck_count} stuck tasks to fix.")
+            if orphaned_count > 0 or stuck_count > 0:
+                print(f"To repair, run: sudo .venv/bin/archivist doctor --no-dry-run")
 
 @app.command()
 def cleanup(
     no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually delete files. If not set, only a preview is shown."),
     force: bool = typer.Option(False, "--force", "-f", help="Force deletion without confirmation.")
 ):
-    """
-    Automatically delete duplicates, keeping the version with the shortest path.
-    """
-    init_db()
-    is_dry_run = not no_dry_run
-    if is_dry_run:
-        print("--- PREVIEW MODE (DRY RUN) ---")
-    else:
-        print("--- ACTUAL DELETION MODE ---")
-    
-    with Session(engine) as session:
-        statement = (
-            select(MediaFile.sha256_hash)
-            .where(MediaFile.status == "completed")
-            .group_by(MediaFile.sha256_hash)
-            .having(func.count(MediaFile.abs_path) > 1)
-        )
-        duplicate_hashes = session.exec(statement).all()
-        if not duplicate_hashes:
-            print("No duplicates found in the database.")
-            return
-        for h in duplicate_hashes:
-            files_statement = select(MediaFile).where(MediaFile.sha256_hash == h)
-            files = session.exec(files_statement).all()
-            files.sort(key=lambda x: len(x.abs_path))
-            keep_file = files[0]
-            delete_files = files[1:]
-            print(f"\nGroup: {h}")
-            print(f"  [KEEP] {keep_file.abs_path}")
-            for df in delete_files:
-                print(f"  [DELETE] {df.abs_path}")
-                if not is_dry_run:
-                    if not force:
-                        confirm = typer.confirm(f"Are you sure you want to delete {df.abs_path}?")
-                        if not confirm: continue
-                    try:
-                        if os.path.exists(df.abs_path):
-                            os.remove(df.abs_path)
-                        session.delete(df)
-                        print(f"    - Deleted.")
-                    except Exception as e:
-                        print(f"    - Error: {e}")
-            session.commit()
-
-@app.command()
-def archive(
-    target_dir: str = typer.Argument(..., help="Target directory to move and organize files."),
-    no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually move files. Default is preview."),
-):
-    """
-    Move and organize unique files into target_dir/YYYY/MM/DD structure.
-    """
-    init_db()
-    target_path = os.path.abspath(target_dir)
-    is_dry_run = not no_dry_run
-
-    if is_dry_run:
-        print(f"--- PREVIEW MODE: Organizing files into {target_path} ---")
-    else:
-        print(f"--- ACTUAL ARCHIVE MODE: Moving files to {target_path} ---")
-        if not os.path.exists(target_path):
-            os.makedirs(target_path)
-
-    with Session(engine) as session:
-        statement = select(MediaFile).where(MediaFile.status == "completed")
-        all_files = session.exec(statement).all()
-
-        if not all_files:
-            print("No completed files found in database to archive.")
-            return
-
-        for mf in all_files:
-            if not os.path.exists(mf.abs_path):
-                continue
-
-            # Get file date (Modification time)
-            mtime = os.path.getmtime(mf.abs_path)
-            dt = datetime.fromtimestamp(mtime)
-            rel_dir = dt.strftime("%Y/%m/%d")
-            dest_dir = os.path.join(target_path, rel_dir)
-            filename = os.path.basename(mf.abs_path)
-            
-            # Intended path (if it were the only file)
-            intended_path = os.path.join(dest_dir, filename)
-            
-            # CRITICAL FIX: If file is already at its intended destination, skip it
-            if mf.abs_path == intended_path:
-                continue
-
-            name, ext = os.path.splitext(filename)
-            final_dest = intended_path
-            
-            # Handle collision with OTHER files
-            counter = 1
-            while os.path.exists(final_dest):
-                # If we are in dry-run, we might see the file itself if we don't have the PK check above
-                final_dest = os.path.join(dest_dir, f"{name}_{counter}{ext}")
-                counter += 1
-
-            print(f"  [MOVE] {mf.abs_path} -> {final_dest}")
-
-            if not is_dry_run:
-                try:
-                    if not os.path.exists(dest_dir):
-                        os.makedirs(dest_dir, exist_ok=True)
-                    
-                    shutil.move(mf.abs_path, final_dest)
-                    
-                    # Update database: Since abs_path is PK, delete and re-insert
-                    old_mf_data = mf.model_dump()
-                    session.delete(mf)
-                    session.commit()
-                    
-                    old_mf_data['abs_path'] = final_dest
-                    new_mf = MediaFile(**old_mf_data)
-                    session.add(new_mf)
-                    session.commit()
-                except Exception as e:
-                    print(f"    - Error moving {mf.abs_path}: {e}")
-
-    if is_dry_run:
-        print(f"\nTo actually archive these files, run: sudo .venv/bin/archivist archive {target_dir} --no-dry-run")
-
-@app.command()
-def web(host: str = "0.0.0.0", port: int = 8000):
-    """
-    Start the Web API and Dashboard.
-    """
-    print(f"Starting Web UI at http://{host}:{port}...")
-    init_db()
-    uvicorn.run("media_archivist.web.app:app", host=host, port=port, reload=True)
-
-@app.command()
-def status():
-    """
-    Check current processing status.
-    """
-    init_db()
-    with Session(engine) as session:
-        total_files = session.exec(select(func.count(MediaFile.abs_path))).one()
-        pending_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "pending")).one()
-        hashing_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "hashing")).one()
-        completed_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "completed")).one()
-        error_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "error")).one()
-        print(f"Total files: {total_files}")
-        print(f"Pending: {pending_count}")
-        print(f"Hashing: {hashing_count}")
-        print(f"Completed: {completed_count}")
-        print(f"Error: {error_count}")
-
+...
 if __name__ == "__main__":
     app()
