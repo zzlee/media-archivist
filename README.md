@@ -25,15 +25,16 @@
 
 ## 🛠️ 維護與診斷 (Health Check)
 - **`list-files` (列出管理路徑)**：
-  查看資料庫目前管理的檔案清單，支援狀態過濾。
+  查看資料庫目前管理的檔案清單，支援狀態、包含路徑與排除路徑過濾。
   ```bash
-  uv run archivist list-files --status error  # 查看出錯的檔案
-  uv run archivist list-files --limit 0       # 列出所有檔案
+  uv run archivist list-files --status error     # 查看出錯的檔案
+  uv run archivist list-files --exclude "/arch"  # 找出尚未歸檔的檔案
+  uv run archivist list-files --limit 0          # 列出所有檔案
   ```
 - **`doctor` (修復不一致)**：
   自動尋找資料庫中有記錄但磁碟上已不存在的檔案，並移除該記錄。
   ```bash
-  uv run archivist doctor --no-dry-run      # 執行修復
+  uv run archivist doctor --no-dry-run           # 執行修復
   ```
 
 ## 🛠️ CLI 指令詳解
@@ -68,4 +69,4 @@ uv run archivist web
 - **精確去重**: 100% Hash 比對，杜絕誤刪。
 - **智慧清理**: 透過路徑長度優先權自動挑選保留項。
 - **時間軸歸檔**: 自動根據檔案日期 (mtime) 建立年/月/日目錄結構。
-- **透明管理**: 提供 `list-files` 與 `doctor` 指令確保資料庫狀態透明且準確。
+- **透明管理**: 提供 `list-files` 強大過濾功能與 `doctor` 自我修復機制。

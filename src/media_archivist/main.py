@@ -8,7 +8,7 @@ from typing import List, Optional
 from media_archivist.core.database import init_db, engine, MediaFile
 from media_archivist.agent.scanner import scan_directory
 from media_archivist.agent.hasher import hash_pending_files
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select, func, col
 
 app = typer.Typer(help="MediaArchivist: Efficient media management tool.")
 
@@ -35,16 +35,24 @@ def start(directories: List[str] = typer.Argument(..., help="List of directories
 @app.command()
 def list_files(
     status: Optional[str] = typer.Option(None, "--status", help="Filter by status: pending, hashing, completed, error"),
+    path: Optional[str] = typer.Option(None, "--path", help="Only show paths containing this string"),
+    exclude: Optional[str] = typer.Option(None, "--exclude", help="Exclude paths containing this string"),
     limit: int = typer.Option(100, "--limit", help="Limit the number of files shown. Use 0 for all.")
 ):
     """
-    List paths currently managed in the database.
+    List paths currently managed in the database with powerful filtering.
     """
     init_db()
     with Session(engine) as session:
         statement = select(MediaFile)
+        
+        # Apply filters
         if status:
             statement = statement.where(MediaFile.status == status)
+        if path:
+            statement = statement.where(col(MediaFile.abs_path).contains(path))
+        if exclude:
+            statement = statement.where(col(MediaFile.abs_path).not_like(f"%{exclude}%"))
         
         if limit > 0:
             statement = statement.limit(limit)
@@ -61,9 +69,15 @@ def list_files(
             print(f"{f.status:<12} | {f.abs_path}")
         
         if limit > 0:
-            total = session.exec(select(func.count(MediaFile.abs_path))).one()
-            if total > limit:
-                print(f"\n... and {total - limit} more files. Use --limit 0 to see all.")
+            # Count for summary
+            count_statement = select(func.count(MediaFile.abs_path))
+            if status: count_statement = count_statement.where(MediaFile.status == status)
+            if path: count_statement = count_statement.where(col(MediaFile.abs_path).contains(path))
+            if exclude: count_statement = count_statement.where(col(MediaFile.abs_path).not_like(f"%{exclude}%"))
+            
+            total_matches = session.exec(count_statement).one()
+            if total_matches > limit:
+                print(f"\n... and {total_matches - limit} more matching files. Use --limit 0 to see all.")
 
 @app.command()
 def doctor(
