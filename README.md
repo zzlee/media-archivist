@@ -46,6 +46,8 @@ uv sync
     ```bash
     uv run archivist archive /目標/歸檔目錄      # 預覽
     sudo .venv/bin/archivist archive /目標/歸檔目錄 --no-dry-run # 執行
+    uv run archivist archive /目標/歸檔目錄 --copy # 預覽 (複製模式)
+    sudo .venv/bin/archivist archive /目標/歸檔目錄 --no-dry-run --copy # 執行 (複製模式)
     ```
 
 ## 🛠️ 維護與診斷 (Health Check)
@@ -87,6 +89,10 @@ uv run archivist web
 ### 5. 自動歸檔整理 (Archive)
 - **預覽模式 (預設)**: 顯示檔案將如何被移動。
 - **正式執行**: `sudo .venv/bin/archivist archive /path/to/archive_root --no-dry-run`
+- **複製模式**: 加上 `--copy` 旗標會複製檔案而非移動（保留原始檔案）。
+  ```bash
+  sudo .venv/bin/archivist archive /path/to/archive_root --no-dry-run --copy
+  ```
 
 ## 核心特性
 - **背景代理 (Agent)**: 非同步計算 SHA-256，具備自動恢復功能。
