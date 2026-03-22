@@ -33,6 +33,47 @@ def start(directories: List[str] = typer.Argument(..., help="List of directories
         print("\nStopping MediaArchivist agent...")
 
 @app.command()
+def doctor(
+    no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually remove orphaned records. Default is preview."),
+):
+    """
+    Health check: Find and remove database records for files that no longer exist on disk.
+    """
+    init_db()
+    is_dry_run = not no_dry_run
+    if is_dry_run:
+        print("--- DOCTOR PREVIEW MODE (DRY RUN) ---")
+    else:
+        print("--- DOCTOR REPAIR MODE ---")
+
+    with Session(engine) as session:
+        statement = select(MediaFile)
+        all_records = session.exec(statement).all()
+        
+        if not all_records:
+            print("Database is empty.")
+            return
+
+        orphaned_count = 0
+        total_checked = 0
+
+        for record in all_records:
+            total_checked += 1
+            if not os.path.exists(record.abs_path):
+                print(f"  [ORPHANED] {record.abs_path}")
+                orphaned_count += 1
+                if not is_dry_run:
+                    session.delete(record)
+        
+        if not is_dry_run:
+            session.commit()
+            print(f"\nSuccessfully removed {orphaned_count} orphaned records.")
+        else:
+            print(f"\nFound {orphaned_count} orphaned records to remove.")
+            if orphaned_count > 0:
+                print(f"To repair, run: uv run archivist doctor --no-dry-run")
+
+@app.command()
 def cleanup(
     no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually delete files. If not set, only a preview is shown."),
     force: bool = typer.Option(False, "--force", "-f", help="Force deletion without confirmation.")
@@ -106,7 +147,6 @@ def archive(
             os.makedirs(target_path)
 
     with Session(engine) as session:
-        # Get all completed files (if cleanup was run, these are unique originals)
         statement = select(MediaFile).where(MediaFile.status == "completed")
         all_files = session.exec(statement).all()
 
@@ -119,21 +159,14 @@ def archive(
                 print(f"Skipping missing file: {mf.abs_path}")
                 continue
 
-            # Get file date (Modification time)
             mtime = os.path.getmtime(mf.abs_path)
             dt = datetime.fromtimestamp(mtime)
-            
-            # Construct target path: YYYY/MM/DD
             rel_dir = dt.strftime("%Y/%m/%d")
             dest_dir = os.path.join(target_path, rel_dir)
-            
             filename = os.path.basename(mf.abs_path)
             name, ext = os.path.splitext(filename)
-            
-            # Final destination path logic
             final_dest = os.path.join(dest_dir, filename)
             
-            # Handle collision
             counter = 1
             while os.path.exists(final_dest):
                 final_dest = os.path.join(dest_dir, f"{name}_{counter}{ext}")
@@ -145,14 +178,10 @@ def archive(
                 try:
                     if not os.path.exists(dest_dir):
                         os.makedirs(dest_dir)
-                    
                     shutil.move(mf.abs_path, final_dest)
-                    
-                    # Update database: Since abs_path is PK, we delete and re-insert
                     old_mf_data = mf.model_dump()
                     session.delete(mf)
-                    session.commit() # Commit deletion first
-                    
+                    session.commit()
                     old_mf_data['abs_path'] = final_dest
                     new_mf = MediaFile(**old_mf_data)
                     session.add(new_mf)

@@ -2,51 +2,67 @@
 
 一個基於 Python 與 `uv` 開發的高效媒體檔案管理工具，專為處理 10 萬級別的雜亂影片與照片設計。
 
-## 🚀 快速開始
-1. 確保已安裝 [uv](https://github.com/astral-sh/uv)
-2. 初始化環境：`uv sync`
-3. 啟動掃描：`uv run archivist start /你的/影片/目錄` (支援多個路徑)
-4. 查看進度：`uv run archivist status`
-5. 開啟管理介面：`uv run archivist web`
+## 🚀 標準工作流程 (SOP)
+建議遵循以下三個步驟，以實現最高效且安全的檔案管理：
+
+1.  **`start` (掃描與識別)**：
+    掃描多個目錄並在背景建立「數位身分證 (Hash)」。
+    ```bash
+    uv run archivist start /你的/雜亂/目錄
+    ```
+2.  **`cleanup` (去重與清理)**：
+    自動刪除重複檔案，釋放硬碟空間（預設保留路徑最短的檔案）。
+    ```bash
+    uv run archivist cleanup                   # 預覽
+    sudo .venv/bin/archivist cleanup --no-dry-run --force  # 執行
+    ```
+3.  **`archive` (歸檔與整理)**：
+    將剩下的唯一檔案依照「年/月/日」自動分類歸位。
+    ```bash
+    uv run archivist archive /目標/歸檔目錄      # 預覽
+    sudo .venv/bin/archivist archive /目標/歸檔目錄 --no-dry-run # 執行
+    ```
+
+## 🛠️ 維護與診斷 (Health Check)
+如果中途發生意外斷電、手動刪除檔案或任務中斷，可執行此指令同步資料庫：
+
+- **`doctor` (修復不一致)**：
+  自動尋找資料庫中有記錄但磁碟上已不存在的檔案，並移除該記錄。
+  ```bash
+  uv run archivist doctor                   # 預覽
+  uv run archivist doctor --no-dry-run      # 執行修復
+  ```
 
 ## 🛠️ CLI 指令詳解
 
 ### 1. 開始掃描與處理 (Start)
-掃描指定目錄並在背景啟動 Hash 計算代理。支援同時傳入多個路徑。
+支援同時傳入多個路徑。
 ```bash
 uv run archivist start /path/to/media1 /path/to/media2
 ```
 
 ### 2. 查看狀態 (Status)
-顯示資料庫中檔案處理的統計資訊，包括總數、待處理、處理中與已完成的數量。
 ```bash
 uv run archivist status
 ```
 
 ### 3. Web 管理介面 (Web)
-啟動一個基於 FastAPI 的 Web 伺服器，提供視覺化 Dashboard 查看重複檔案清單。
+視覺化 Dashboard 查看重複檔案清單。
 ```bash
 uv run archivist web
 ```
-預設網址：`http://localhost:8000`
 
 ### 4. 自動去重清理 (Cleanup)
-根據「保留最短路徑」規則自動刪除重複檔案。
 - **預覽模式 (預設)**: 僅列出將要刪除的檔案。
-  ```bash
-  uv run archivist cleanup
-  ```
-- **正式刪除**: 執行實際的刪除動作。
-  ```bash
-  sudo uv run archivist cleanup --no-dry-run
-  ```
-- **強制刪除**: 跳過確認，直接清理所有重複項。
-  ```bash
-  sudo uv run archivist cleanup --no-dry-run --force
-  ```
+- **正式刪除**: `sudo .venv/bin/archivist cleanup --no-dry-run`
+
+### 5. 自動歸檔整理 (Archive)
+- **預覽模式 (預設)**: 顯示檔案將如何被移動。
+- **正式執行**: `sudo .venv/bin/archivist archive /path/to/archive_root --no-dry-run`
 
 ## 核心特性
 - **背景代理 (Agent)**: 非同步計算 SHA-256，控制系統資源佔用。
 - **精確去重**: 100% Hash 比對，杜絕誤刪。
 - **智慧清理**: 透過路徑長度優先權自動挑選保留項。
-- **手動挑選**: 提供 Web 介面讓你最終確認要刪除的檔案。
+- **時間軸歸檔**: 自動根據檔案日期 (mtime) 建立年/月/日目錄結構。
+- **自我修復**: 提供 `doctor` 指令確保資料庫與磁碟同步。
