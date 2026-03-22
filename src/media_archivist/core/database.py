@@ -2,6 +2,7 @@ from typing import Optional
 from sqlmodel import Field, SQLModel, create_engine, Session, select, text
 import os
 from pathlib import Path
+from datetime import datetime
 
 # Database path
 DB_DIR = Path("data")
@@ -11,7 +12,15 @@ class MediaFile(SQLModel, table=True):
     abs_path: str = Field(primary_key=True)
     file_size: int
     sha256_hash: Optional[str] = Field(default=None, index=True)
-    status: str = Field(default="pending")  # pending/hashing/completed
+    status: str = Field(default="pending")  # pending/hashing/completed/error
+
+class Task(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str  # hashing, cleanup, archive
+    status: str = Field(default="running")  # running, completed, failed
+    progress: float = Field(default=0.0)    # 0.0 to 100.0
+    message: Optional[str] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 # SQLite engine with WAL mode
 sqlite_url = f"sqlite:///{DB_PATH}"
