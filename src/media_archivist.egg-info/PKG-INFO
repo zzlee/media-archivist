@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: media-archivist
+Version: 0.1.0
+Summary: A high-efficiency media file management tool based on Python and uv.
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: aiosqlite>=0.22.1
+Requires-Dist: fastapi>=0.135.1
+Requires-Dist: sqlmodel>=0.0.37
+Requires-Dist: typer>=0.24.1
+Requires-Dist: uvicorn>=0.42.0
+
+# MediaArchivist
+
+一個基於 Python 與 `uv` 開發的高效媒體檔案管理工具，專為處理 10 萬級別的雜亂影片與照片設計。
+
+## 🚀 快速開始
+1. 確保已安裝 [uv](https://github.com/astral-sh/uv)
+2. 初始化環境：`uv sync`
+3. 啟動掃描：`uv run archivist start /你的/影片/目錄`
+4. 查看進度：`uv run archivist status`
+
+## 核心特性
+- **背景代理 (Agent)**: 非同步計算 SHA-256，不佔用系統資源。
+- **精確去重**: 100% Hash 比對，杜絕誤刪。
+- **手動挑選**: 提供 Web 介面讓你最終確認要刪除的檔案。

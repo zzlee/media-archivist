@@ -1,0 +1,20 @@
+[project]
+name = "media-archivist"
+version = "0.1.0"
+description = "A high-efficiency media file management tool based on Python and uv."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.135.1",
+    "sqlmodel>=0.0.37",
+    "typer>=0.24.1",
+    "uvicorn>=0.42.0",
+]
+
+[project.scripts]
+archivist = "media_archivist.main:app"
+
+[tool.uv]
+managed = true
+package = true

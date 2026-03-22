@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+ENV/
+
+# Project Specific
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+test_media/
+
+# OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
