@@ -45,36 +45,23 @@ def list_files(
     init_db()
     with Session(engine) as session:
         statement = select(MediaFile)
-        
-        # Apply filters
-        if status:
-            statement = statement.where(MediaFile.status == status)
-        if path:
-            statement = statement.where(col(MediaFile.abs_path).contains(path))
-        if exclude:
-            statement = statement.where(col(MediaFile.abs_path).not_like(f"%{exclude}%"))
-        
-        if limit > 0:
-            statement = statement.limit(limit)
-            
+        if status: statement = statement.where(MediaFile.status == status)
+        if path: statement = statement.where(col(MediaFile.abs_path).contains(path))
+        if exclude: statement = statement.where(col(MediaFile.abs_path).not_like(f"%{exclude}%"))
+        if limit > 0: statement = statement.limit(limit)
         results = session.exec(statement).all()
-        
         if not results:
             print("No files found matching the criteria.")
             return
-
         print(f"{'Status':<12} | {'Path'}")
         print("-" * 50)
         for f in results:
             print(f"{f.status:<12} | {f.abs_path}")
-        
         if limit > 0:
-            # Count for summary
             count_statement = select(func.count(MediaFile.abs_path))
             if status: count_statement = count_statement.where(MediaFile.status == status)
             if path: count_statement = count_statement.where(col(MediaFile.abs_path).contains(path))
             if exclude: count_statement = count_statement.where(col(MediaFile.abs_path).not_like(f"%{exclude}%"))
-            
             total_matches = session.exec(count_statement).one()
             if total_matches > limit:
                 print(f"\n... and {total_matches - limit} more matching files. Use --limit 0 to see all.")
@@ -96,11 +83,9 @@ def doctor(
     with Session(engine) as session:
         statement = select(MediaFile)
         all_records = session.exec(statement).all()
-        
         if not all_records:
             print("Database is empty.")
             return
-
         orphaned_count = 0
         for record in all_records:
             if not os.path.exists(record.abs_path):
@@ -108,7 +93,6 @@ def doctor(
                 orphaned_count += 1
                 if not is_dry_run:
                     session.delete(record)
-        
         if not is_dry_run:
             session.commit()
             print(f"\nSuccessfully removed {orphaned_count} orphaned records.")
@@ -125,7 +109,6 @@ def cleanup(
     """
     init_db()
     is_dry_run = not no_dry_run
-    
     if is_dry_run:
         print("--- PREVIEW MODE (DRY RUN) ---")
     else:
@@ -139,21 +122,17 @@ def cleanup(
             .having(func.count(MediaFile.abs_path) > 1)
         )
         duplicate_hashes = session.exec(statement).all()
-        
         if not duplicate_hashes:
             print("No duplicates found in the database.")
             return
-
         for h in duplicate_hashes:
             files_statement = select(MediaFile).where(MediaFile.sha256_hash == h)
             files = session.exec(files_statement).all()
             files.sort(key=lambda x: len(x.abs_path))
             keep_file = files[0]
             delete_files = files[1:]
-            
             print(f"\nGroup: {h}")
             print(f"  [KEEP] {keep_file.abs_path}")
-            
             for df in delete_files:
                 print(f"  [DELETE] {df.abs_path}")
                 if not is_dry_run:
@@ -198,19 +177,29 @@ def archive(
 
         for mf in all_files:
             if not os.path.exists(mf.abs_path):
-                print(f"Skipping missing file: {mf.abs_path}")
                 continue
 
+            # Get file date (Modification time)
             mtime = os.path.getmtime(mf.abs_path)
             dt = datetime.fromtimestamp(mtime)
             rel_dir = dt.strftime("%Y/%m/%d")
             dest_dir = os.path.join(target_path, rel_dir)
             filename = os.path.basename(mf.abs_path)
-            name, ext = os.path.splitext(filename)
-            final_dest = os.path.join(dest_dir, filename)
             
+            # Intended path (if it were the only file)
+            intended_path = os.path.join(dest_dir, filename)
+            
+            # CRITICAL FIX: If file is already at its intended destination, skip it
+            if mf.abs_path == intended_path:
+                continue
+
+            name, ext = os.path.splitext(filename)
+            final_dest = intended_path
+            
+            # Handle collision with OTHER files
             counter = 1
             while os.path.exists(final_dest):
+                # If we are in dry-run, we might see the file itself if we don't have the PK check above
                 final_dest = os.path.join(dest_dir, f"{name}_{counter}{ext}")
                 counter += 1
 
@@ -219,11 +208,15 @@ def archive(
             if not is_dry_run:
                 try:
                     if not os.path.exists(dest_dir):
-                        os.makedirs(dest_dir)
+                        os.makedirs(dest_dir, exist_ok=True)
+                    
                     shutil.move(mf.abs_path, final_dest)
+                    
+                    # Update database: Since abs_path is PK, delete and re-insert
                     old_mf_data = mf.model_dump()
                     session.delete(mf)
                     session.commit()
+                    
                     old_mf_data['abs_path'] = final_dest
                     new_mf = MediaFile(**old_mf_data)
                     session.add(new_mf)
@@ -255,7 +248,6 @@ def status():
         hashing_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "hashing")).one()
         completed_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "completed")).one()
         error_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "error")).one()
-
         print(f"Total files: {total_files}")
         print(f"Pending: {pending_count}")
         print(f"Hashing: {hashing_count}")
