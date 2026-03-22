@@ -30,9 +30,10 @@ uv sync
 建議遵循以下三個步驟，以實現最高效且安全的檔案管理：
 
 1.  **`start` (掃描與識別)**：
-    掃描多個目錄並在背景建立「數位身分證 (Hash)」。
+    掃描多個目錄並在背景建立「數位身分證 (Hash)」。**可不帶參數執行以恢復中斷的任務。**
     ```bash
     uv run archivist start /你的/雜亂/目錄
+    uv run archivist start                   # 僅恢復/繼續處理現有任務
     ```
 2.  **`cleanup` (去重與清理)**：
     自動刪除重複檔案，釋放硬碟空間（預設保留路徑最短的檔案）。
@@ -53,7 +54,6 @@ uv sync
   ```bash
   uv run archivist list-files --status error     # 查看出錯的檔案
   uv run archivist list-files --exclude "/arch"  # 找出尚未歸檔的檔案
-  uv run archivist list-files --limit 0          # 列出所有檔案
   ```
 - **`doctor` (修復不一致)**：
   自動尋找資料庫中有記錄但磁碟上已不存在的檔案，並移除該記錄。
@@ -64,7 +64,7 @@ uv sync
 ## 🛠️ CLI 指令詳解
 
 ### 1. 開始掃描與處理 (Start)
-支援同時傳入多個路徑。
+支援同時傳入多個路徑，或不帶參數以繼續執行。
 ```bash
 uv run archivist start /path/to/media1 /path/to/media2
 ```
@@ -89,7 +89,7 @@ uv run archivist web
 - **正式執行**: `sudo .venv/bin/archivist archive /path/to/archive_root --no-dry-run`
 
 ## 核心特性
-- **背景代理 (Agent)**: 非同步計算 SHA-256，控制系統資源佔用。
+- **背景代理 (Agent)**: 非同步計算 SHA-256，具備自動恢復功能。
 - **精確去重**: 100% Hash 比對，杜絕誤刪。
 - **智慧清理**: 透過路徑長度優先權自動挑選保留項。
 - **時間軸歸檔**: 自動根據檔案日期 (mtime) 建立年/月/日目錄結構。

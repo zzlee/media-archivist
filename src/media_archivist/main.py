@@ -28,22 +28,27 @@ def reset_stuck_hashing():
             session.commit()
 
 @app.command()
-def start(directories: List[str] = typer.Argument(..., help="List of directories to scan")):
+def start(directories: Optional[List[str]] = typer.Argument(None, help="Directories to scan. If omitted, only resumes pending tasks.")):
     """
-    Start scanning and background hashing. Automatically resumes interrupted tasks.
+    Start scanning and/or background hashing. Automatically resumes interrupted tasks.
     """
-    print(f"Starting MediaArchivist for: {', '.join(directories)}...")
     init_db()
     
     # AUTO-RESUME: Reset any stuck hashing tasks before starting
     reset_stuck_hashing()
     
     async def run_agent():
-        scan_tasks = [scan_directory(d) for d in directories]
-        await asyncio.gather(
-            *scan_tasks,
-            hash_pending_files()
-        )
+        tasks = []
+        if directories:
+            print(f"Scanning directories: {', '.join(directories)}...")
+            tasks.extend([scan_directory(d) for d in directories])
+        else:
+            print("No directories provided. Focusing on existing pending tasks...")
+        
+        # Always include the hashing agent
+        tasks.append(hash_pending_files())
+        
+        await asyncio.gather(*tasks)
     
     try:
         asyncio.run(run_agent())
