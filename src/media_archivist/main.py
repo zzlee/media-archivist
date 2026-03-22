@@ -2,6 +2,8 @@ import typer
 import asyncio
 import uvicorn
 import os
+import shutil
+from datetime import datetime
 from typing import List, Optional
 from media_archivist.core.database import init_db, engine, MediaFile
 from media_archivist.agent.scanner import scan_directory
@@ -43,12 +45,10 @@ def cleanup(
     
     if is_dry_run:
         print("--- PREVIEW MODE (DRY RUN) ---")
-        print("To actually delete files, use: sudo .venv/bin/archivist cleanup --no-dry-run")
     else:
         print("--- ACTUAL DELETION MODE ---")
     
     with Session(engine) as session:
-        # Find hashes with more than 1 occurrence
         statement = (
             select(MediaFile.sha256_hash)
             .where(MediaFile.status == "completed")
@@ -61,14 +61,9 @@ def cleanup(
             print("No duplicates found in the database.")
             return
 
-        total_to_delete = 0
-        total_saved_space = 0
-
         for h in duplicate_hashes:
             files_statement = select(MediaFile).where(MediaFile.sha256_hash == h)
             files = session.exec(files_statement).all()
-            
-            # Rule: Keep the one with the shortest path length
             files.sort(key=lambda x: len(x.abs_path))
             keep_file = files[0]
             delete_files = files[1:]
@@ -77,33 +72,96 @@ def cleanup(
             print(f"  [KEEP] {keep_file.abs_path}")
             
             for df in delete_files:
-                print(f"  [DELETE] {df.abs_path} ({df.file_size} bytes)")
-                total_to_delete += 1
-                total_saved_space += df.file_size
-                
+                print(f"  [DELETE] {df.abs_path}")
                 if not is_dry_run:
                     if not force:
                         confirm = typer.confirm(f"Are you sure you want to delete {df.abs_path}?")
-                        if not confirm:
-                            print("    - Skipped.")
-                            continue
-                    
+                        if not confirm: continue
                     try:
                         if os.path.exists(df.abs_path):
                             os.remove(df.abs_path)
-                            session.delete(df)
-                            print(f"    - Deleted successfully.")
-                        else:
-                            print(f"    - File already missing from disk, removing from DB.")
-                            session.delete(df)
+                        session.delete(df)
+                        print(f"    - Deleted.")
                     except Exception as e:
-                        print(f"    - Error deleting {df.abs_path}: {e}")
-            
+                        print(f"    - Error: {e}")
             session.commit()
 
-        print(f"\nSummary:")
-        print(f"  Total files processed for deletion: {total_to_delete}")
-        print(f"  Estimated space to save: {total_saved_space / (1024*1024):.2f} MB")
+@app.command()
+def archive(
+    target_dir: str = typer.Argument(..., help="Target directory to move and organize files."),
+    no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually move files. Default is preview."),
+):
+    """
+    Move and organize unique files into target_dir/YYYY/MM/DD structure.
+    """
+    init_db()
+    target_path = os.path.abspath(target_dir)
+    is_dry_run = not no_dry_run
+
+    if is_dry_run:
+        print(f"--- PREVIEW MODE: Organizing files into {target_path} ---")
+    else:
+        print(f"--- ACTUAL ARCHIVE MODE: Moving files to {target_path} ---")
+        if not os.path.exists(target_path):
+            os.makedirs(target_path)
+
+    with Session(engine) as session:
+        # Get all completed files (if cleanup was run, these are unique originals)
+        statement = select(MediaFile).where(MediaFile.status == "completed")
+        all_files = session.exec(statement).all()
+
+        if not all_files:
+            print("No completed files found in database to archive.")
+            return
+
+        for mf in all_files:
+            if not os.path.exists(mf.abs_path):
+                print(f"Skipping missing file: {mf.abs_path}")
+                continue
+
+            # Get file date (Modification time)
+            mtime = os.path.getmtime(mf.abs_path)
+            dt = datetime.fromtimestamp(mtime)
+            
+            # Construct target path: YYYY/MM/DD
+            rel_dir = dt.strftime("%Y/%m/%d")
+            dest_dir = os.path.join(target_path, rel_dir)
+            
+            filename = os.path.basename(mf.abs_path)
+            name, ext = os.path.splitext(filename)
+            
+            # Final destination path logic
+            final_dest = os.path.join(dest_dir, filename)
+            
+            # Handle collision
+            counter = 1
+            while os.path.exists(final_dest):
+                final_dest = os.path.join(dest_dir, f"{name}_{counter}{ext}")
+                counter += 1
+
+            print(f"  [MOVE] {mf.abs_path} -> {final_dest}")
+
+            if not is_dry_run:
+                try:
+                    if not os.path.exists(dest_dir):
+                        os.makedirs(dest_dir)
+                    
+                    shutil.move(mf.abs_path, final_dest)
+                    
+                    # Update database: Since abs_path is PK, we delete and re-insert
+                    old_mf_data = mf.model_dump()
+                    session.delete(mf)
+                    session.commit() # Commit deletion first
+                    
+                    old_mf_data['abs_path'] = final_dest
+                    new_mf = MediaFile(**old_mf_data)
+                    session.add(new_mf)
+                    session.commit()
+                except Exception as e:
+                    print(f"    - Error moving {mf.abs_path}: {e}")
+
+    if is_dry_run:
+        print(f"\nTo actually archive these files, run: sudo .venv/bin/archivist archive {target_dir} --no-dry-run")
 
 @app.command()
 def web(host: str = "0.0.0.0", port: int = 8000):
