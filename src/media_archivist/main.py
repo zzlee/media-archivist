@@ -33,6 +33,39 @@ def start(directories: List[str] = typer.Argument(..., help="List of directories
         print("\nStopping MediaArchivist agent...")
 
 @app.command()
+def list_files(
+    status: Optional[str] = typer.Option(None, "--status", help="Filter by status: pending, hashing, completed, error"),
+    limit: int = typer.Option(100, "--limit", help="Limit the number of files shown. Use 0 for all.")
+):
+    """
+    List paths currently managed in the database.
+    """
+    init_db()
+    with Session(engine) as session:
+        statement = select(MediaFile)
+        if status:
+            statement = statement.where(MediaFile.status == status)
+        
+        if limit > 0:
+            statement = statement.limit(limit)
+            
+        results = session.exec(statement).all()
+        
+        if not results:
+            print("No files found matching the criteria.")
+            return
+
+        print(f"{'Status':<12} | {'Path'}")
+        print("-" * 50)
+        for f in results:
+            print(f"{f.status:<12} | {f.abs_path}")
+        
+        if limit > 0:
+            total = session.exec(select(func.count(MediaFile.abs_path))).one()
+            if total > limit:
+                print(f"\n... and {total - limit} more files. Use --limit 0 to see all.")
+
+@app.command()
 def doctor(
     no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually remove orphaned records. Default is preview."),
 ):
@@ -55,10 +88,7 @@ def doctor(
             return
 
         orphaned_count = 0
-        total_checked = 0
-
         for record in all_records:
-            total_checked += 1
             if not os.path.exists(record.abs_path):
                 print(f"  [ORPHANED] {record.abs_path}")
                 orphaned_count += 1
@@ -70,8 +100,6 @@ def doctor(
             print(f"\nSuccessfully removed {orphaned_count} orphaned records.")
         else:
             print(f"\nFound {orphaned_count} orphaned records to remove.")
-            if orphaned_count > 0:
-                print(f"To repair, run: uv run archivist doctor --no-dry-run")
 
 @app.command()
 def cleanup(
