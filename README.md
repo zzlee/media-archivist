@@ -2,6 +2,30 @@
 
 一個基於 Python 與 `uv` 開發的高效媒體檔案管理工具，專為處理 10 萬級別的雜亂影片與照片設計。
 
+## 📦 安裝與設定 (Installation)
+
+### 1. 準備環境
+本專案依賴 [uv](https://github.com/astral-sh/uv) 進行高效的套件與虛擬環境管理。請先安裝 `uv`：
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### 2. 下載與同步
+```bash
+# 複製專案
+git clone https://github.com/zzlee/media-archivist.git
+cd media-archivist
+
+# 初始化環境並下載依賴
+uv sync
+```
+
+---
+
 ## 🚀 標準工作流程 (SOP)
 建議遵循以下三個步驟，以實現最高效且安全的檔案管理：
 
