@@ -30,9 +30,10 @@ def calculate_sha256(file_path: str):
 
 async def hash_pending_files():
     """Finds files with 'pending' status and calculates their SHA-256 hash."""
+    print("Background Hasher Agent started.")
     while True:
         with Session(engine) as session:
-            # Calculate total progress for the task
+            # Calculate total progress
             total = session.exec(select(func.count(MediaFile.abs_path))).one()
             done = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "completed")).one()
             
@@ -60,6 +61,7 @@ async def hash_pending_files():
                 if file_hash:
                     media_file.sha256_hash = file_hash
                     media_file.status = "completed"
+                    print(f"  [HASHED] {media_file.abs_path}")
                 else:
                     media_file.status = "error"
                 
