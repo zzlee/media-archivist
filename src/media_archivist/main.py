@@ -12,13 +12,31 @@ from sqlmodel import Session, select, func, col
 
 app = typer.Typer(help="MediaArchivist: Efficient media management tool.")
 
+def reset_stuck_hashing():
+    """
+    Finds any files stuck in 'hashing' status and resets them to 'pending'.
+    This allows the system to resume interrupted tasks automatically.
+    """
+    with Session(engine) as session:
+        statement = select(MediaFile).where(MediaFile.status == "hashing")
+        stuck_files = session.exec(statement).all()
+        if stuck_files:
+            print(f"Found {len(stuck_files)} interrupted tasks. Resuming...")
+            for f in stuck_files:
+                f.status = "pending"
+                session.add(f)
+            session.commit()
+
 @app.command()
 def start(directories: List[str] = typer.Argument(..., help="List of directories to scan")):
     """
-    Start scanning one or more directories and background hashing.
+    Start scanning and background hashing. Automatically resumes interrupted tasks.
     """
     print(f"Starting MediaArchivist for: {', '.join(directories)}...")
     init_db()
+    
+    # AUTO-RESUME: Reset any stuck hashing tasks before starting
+    reset_stuck_hashing()
     
     async def run_agent():
         scan_tasks = [scan_directory(d) for d in directories]
@@ -91,14 +109,11 @@ def doctor(
         stuck_count = 0
         
         for record in all_records:
-            # 1. Check for orphaned records (File missing on disk)
             if not os.path.exists(record.abs_path):
                 print(f"  [ORPHANED] {record.abs_path}")
                 orphaned_count += 1
                 if not is_dry_run:
                     session.delete(record)
-            
-            # 2. Check for stuck 'hashing' status
             elif record.status == "hashing":
                 print(f"  [STUCK] {record.abs_path} (Resetting to pending)")
                 stuck_count += 1
@@ -119,6 +134,136 @@ def cleanup(
     no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually delete files. If not set, only a preview is shown."),
     force: bool = typer.Option(False, "--force", "-f", help="Force deletion without confirmation.")
 ):
-...
+    """
+    Automatically delete duplicates, keeping the version with the shortest path.
+    """
+    init_db()
+    is_dry_run = not no_dry_run
+    if is_dry_run:
+        print("--- PREVIEW MODE (DRY RUN) ---")
+    else:
+        print("--- ACTUAL DELETION MODE ---")
+    
+    with Session(engine) as session:
+        statement = (
+            select(MediaFile.sha256_hash)
+            .where(MediaFile.status == "completed")
+            .group_by(MediaFile.sha256_hash)
+            .having(func.count(MediaFile.abs_path) > 1)
+        )
+        duplicate_hashes = session.exec(statement).all()
+        if not duplicate_hashes:
+            print("No duplicates found in the database.")
+            return
+        for h in duplicate_hashes:
+            files_statement = select(MediaFile).where(MediaFile.sha256_hash == h)
+            files = session.exec(files_statement).all()
+            files.sort(key=lambda x: len(x.abs_path))
+            keep_file = files[0]
+            delete_files = files[1:]
+            print(f"\nGroup: {h}")
+            print(f"  [KEEP] {keep_file.abs_path}")
+            for df in delete_files:
+                print(f"  [DELETE] {df.abs_path}")
+                if not is_dry_run:
+                    if not force:
+                        confirm = typer.confirm(f"Are you sure you want to delete {df.abs_path}?")
+                        if not confirm: continue
+                    try:
+                        if os.path.exists(df.abs_path):
+                            os.remove(df.abs_path)
+                        session.delete(df)
+                        print(f"    - Deleted.")
+                    except Exception as e:
+                        print(f"    - Error: {e}")
+            session.commit()
+
+@app.command()
+def archive(
+    target_dir: str = typer.Argument(..., help="Target directory to move and organize files."),
+    no_dry_run: bool = typer.Option(False, "--no-dry-run", help="Actually move files. Default is preview."),
+):
+    """
+    Move and organize unique files into target_dir/YYYY/MM/DD structure.
+    """
+    init_db()
+    target_path = os.path.abspath(target_dir)
+    is_dry_run = not no_dry_run
+
+    if is_dry_run:
+        print(f"--- PREVIEW MODE: Organizing files into {target_path} ---")
+    else:
+        print(f"--- ACTUAL ARCHIVE MODE: Moving files to {target_path} ---")
+        if not os.path.exists(target_path):
+            os.makedirs(target_path)
+
+    with Session(engine) as session:
+        statement = select(MediaFile).where(MediaFile.status == "completed")
+        all_files = session.exec(statement).all()
+
+        if not all_files:
+            print("No completed files found in database to archive.")
+            return
+
+        for mf in all_files:
+            if not os.path.exists(mf.abs_path):
+                continue
+            mtime = os.path.getmtime(mf.abs_path)
+            dt = datetime.fromtimestamp(mtime)
+            rel_dir = dt.strftime("%Y/%m/%d")
+            dest_dir = os.path.join(target_path, rel_dir)
+            filename = os.path.basename(mf.abs_path)
+            intended_path = os.path.join(dest_dir, filename)
+            if mf.abs_path == intended_path:
+                continue
+            name, ext = os.path.splitext(filename)
+            final_dest = intended_path
+            counter = 1
+            while os.path.exists(final_dest):
+                final_dest = os.path.join(dest_dir, f"{name}_{counter}{ext}")
+                counter += 1
+            print(f"  [MOVE] {mf.abs_path} -> {final_dest}")
+            if not is_dry_run:
+                try:
+                    if not os.path.exists(dest_dir):
+                        os.makedirs(dest_dir, exist_ok=True)
+                    shutil.move(mf.abs_path, final_dest)
+                    old_mf_data = mf.model_dump()
+                    session.delete(mf)
+                    session.commit()
+                    old_mf_data['abs_path'] = final_dest
+                    new_mf = MediaFile(**old_mf_data)
+                    session.add(new_mf)
+                    session.commit()
+                except Exception as e:
+                    print(f"    - Error: {e}")
+
+@app.command()
+def web(host: str = "0.0.0.0", port: int = 8000):
+    """
+    Start the Web API and Dashboard.
+    """
+    print(f"Starting Web UI at http://{host}:{port}...")
+    init_db()
+    uvicorn.run("media_archivist.web.app:app", host=host, port=port, reload=True)
+
+@app.command()
+def status():
+    """
+    Check current processing status.
+    """
+    init_db()
+    with Session(engine) as session:
+        total_files = session.exec(select(func.count(MediaFile.abs_path))).one()
+        pending_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "pending")).one()
+        hashing_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "hashing")).one()
+        completed_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "completed")).one()
+        error_count = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "error")).one()
+        print(f"Total files: {total_files}")
+        print(f"Pending: {pending_count}")
+        print(f"Hashing: {hashing_count}")
+        print(f"Completed: {completed_count}")
+        print(f"Error: {error_count}")
+
 if __name__ == "__main__":
     app()
