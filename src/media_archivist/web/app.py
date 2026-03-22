@@ -24,6 +24,7 @@ COMMON_STYLE = """
     .task-status { font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 10px; background: #eee; }
     .status-completed { background: var(--success); color: white; }
     .status-running { background: var(--primary); color: white; }
+    .status-failed { background: var(--accent); color: white; }
     .task-msg { font-size: 0.8rem; color: #7f8c8d; margin-top: 0.3rem; }
 """
 
@@ -42,7 +43,7 @@ def dashboard(session: Session = Depends(get_session)):
             @media (min-width: 480px) {{ .stats-grid {{ grid-template-columns: repeat(4, 1fr); }} }}
             .stat-card {{ text-align: center; padding: 0.8rem; background: #f8f9fa; border-radius: 8px; border: 1px solid #eee; }}
             .stat-value {{ font-size: 1.2rem; font-weight: bold; color: var(--primary); }}
-            .stat-label {{ font-size: 0.7rem; color: #7f8c8d; text-transform: uppercase; }}
+            .stat-label {{ font-size: 0.7rem; color: #7f8c8d; text-transform: uppercase; margin-top: 0.2rem; }}
         </style>
     </head>
     <body>
@@ -80,7 +81,7 @@ def dashboard(session: Session = Depends(get_session)):
                     document.getElementById('stat-error').innerText = data.error;
                     
                     const tasksContainer = document.getElementById('tasks-container');
-                    if (data.tasks.length === 0) {{
+                    if (!data.tasks || data.tasks.length === 0) {{
                         tasksContainer.innerHTML = '<p style="color: #7f8c8d; text-align: center;">No active tasks.</p>';
                     }} else {{
                         tasksContainer.innerHTML = data.tasks.map(task => `
@@ -98,7 +99,10 @@ def dashboard(session: Session = Depends(get_session)):
                     }}
                     
                     setTimeout(updateStatus, 2000);
-                } catch (e) {{ setTimeout(updateStatus, 5000); }}
+                }} catch (e) {{ 
+                    console.error('Update failed:', e);
+                    setTimeout(updateStatus, 5000); 
+                }}
             }}
             updateStatus();
         </script>
@@ -136,7 +140,7 @@ def duplicates_view(session: Session = Depends(get_session)):
             ul {{ list-style: none; padding-left: 0; margin-top: 0.8rem; }}
             li {{ padding: 0.6rem 0; border-bottom: 1px solid #ecf0f1; word-break: break-all; font-size: 0.85rem; color: #444; }}
             li:last-child {{ border-bottom: none; }}
-            .badge {{ display: inline-block; background: var(--accent); color: white; padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.75rem; font-weight: bold; margin-bottom: 0.5rem; }}
+            .badge {{ display: inline-block; background: var(--accent); color: white; padding: 0.25rem 0.6rem; border-radius: 20px; font-size: 0.75rem; font-weight: bold; margin-bottom: 0.5rem; }}
             .back-link {{ display: inline-block; margin-bottom: 1rem; color: var(--primary); text-decoration: none; font-weight: bold; }}
         </style>
     </head>
@@ -158,7 +162,6 @@ def get_status(session: Session = Depends(get_session)):
     pending = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "pending")).one()
     error = session.exec(select(func.count(MediaFile.abs_path)).where(MediaFile.status == "error")).one()
     
-    # Get all active tasks
     tasks = session.exec(select(Task).order_by(Task.updated_at.desc())).all()
     
     return {
@@ -166,5 +169,5 @@ def get_status(session: Session = Depends(get_session)):
         "completed": completed,
         "pending": pending,
         "error": error,
-        "tasks": [t.model_dump() for f in [tasks] for t in f]
+        "tasks": [t.model_dump() for t in tasks]
     }
