@@ -27,8 +27,14 @@ uv sync
 ---
 
 ## 🚀 標準工作流程 (SOP)
-建議遵循以下三個步驟，以實現最高效且安全的檔案管理：
+建議遵循以下步驟，以實現最高效且安全的檔案管理：
 
+0.  **`unpack` (解壓縮與匯入)**：
+    掃描目錄中的壓縮檔（`.zip`, `.7z`, `.tar.gz`），自動解壓並進入處理排程。
+    ```bash
+    uv run archivist unpack /你的/壓縮檔目錄
+    uv run archivist unpack /路徑/到/單一檔案.7z
+    ```
 1.  **`start` (掃描與識別)**：
     掃描多個目錄並在背景建立「數位身分證 (Hash)」。**可不帶參數執行以恢復中斷的任務。**
     ```bash
@@ -36,18 +42,17 @@ uv sync
     uv run archivist start                   # 僅恢復/繼續處理現有任務
     ```
 2.  **`cleanup` (去重與清理)**：
-    自動刪除重複檔案，釋放硬碟空間（預設保留路徑最短的檔案）。
+    自動刪除重複檔案，釋放硬碟空間（預設保留**最舊**的原始檔案）。
     ```bash
     uv run archivist cleanup                   # 預覽
     sudo .venv/bin/archivist cleanup --no-dry-run --force  # 執行
     ```
 3.  **`archive` (歸檔與整理)**：
-    將剩下的唯一檔案依照「年/月/日」自動分類歸位。
+    將剩下的唯一檔案依照「年/月/日」自動分類歸位，**並完整保留原始檔案屬性（如建立/修改時間）**。
     ```bash
     uv run archivist archive /目標/歸檔目錄      # 預覽
     sudo .venv/bin/archivist archive /目標/歸檔目錄 --no-dry-run # 執行
-    uv run archivist archive /目標/歸檔目錄 --copy # 預覽 (複製模式)
-    sudo .venv/bin/archivist archive /目標/歸檔目錄 --no-dry-run --copy # 執行 (複製模式)
+    uv run archivist archive /目標/歸檔目錄 --copy # 複製並保留屬性
     ```
 
 ## 🛠️ 維護與診斷 (Health Check)
@@ -95,8 +100,8 @@ uv run archivist web
   ```
 
 ## 核心特性
-- **背景代理 (Agent)**: 非同步計算 SHA-256，具備自動恢復功能。
-- **精確去重**: 100% Hash 比對，杜絕誤刪。
-- **智慧清理**: 透過路徑長度優先權自動挑選保留項。
-- **時間軸歸檔**: 自動根據檔案日期 (mtime) 建立年/月/日目錄結構。
-- **透明管理**: 提供 `list-files` 強大過濾功能與 `doctor` 自我修復機制。
+- **壓縮檔匯入 (Archive Ingestion)**: 支援 `.zip`, `.7z`, `.tar.gz` 自動解壓並建立管理索引。
+- **背景代理 (Agent)**: 非同步計算 SHA-256，具備斷點續傳與任務進度追蹤。
+- **智慧清理 (Smart Cleanup)**: 自動辨識重複項，並**優先保留建立日期最早的原始檔案**。
+- **無損歸檔**: 整理檔案時**完整保留原始元數據 (Metadata)**，包含建立與修改時間。
+- **精確去重**: 基於檔案內容 Hash 比對，杜絕檔名不同但內容相同的冗餘。
