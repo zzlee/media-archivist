@@ -7,6 +7,10 @@ __pycache__/
 env/
 venv/
 ENV/
+*.egg-info/
+dist/
+build/
+.ruff_cache/
 
 # Project Specific
 data/
