@@ -87,16 +87,23 @@ def dashboard(session: Session = Depends(get_session)):
                         tasksContainer.innerHTML = data.tasks.map(task => `
                             <div class="task-item">
                                 <div class="task-header">
-                                    <span class="task-name">${{task.name}}</span>
-                                    <span class="task-status status-${{task.status}}">${{task.status}}</span>
+                                    <div>
+                                        <span class="task-status status-${{task.status}}">${{(task.task_type || 'unknown').toUpperCase()}}</span>
+                                        <span class="task-name">${{task.name}}</span>
+                                    </div>
+                                    <span style="font-size: 0.7rem; color: #999;">${{new Date(task.updated_at).toLocaleTimeString()}}</span>
                                 </div>
                                 <div class="progress-wrapper">
                                     <div class="progress-bar" style="width: ${{task.progress}}%">${{Math.round(task.progress)}}%</div>
                                 </div>
-                                <div class="task-msg">${{task.message || ''}}</div>
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div class="task-msg">${{task.message || ''}}</div>
+                                    <div style="font-size: 0.75rem; color: #7f8c8d;">${{task.completed_items}} / ${{task.total_items}}</div>
+                                </div>
                             </div>
                         `).join('');
                     }}
+
                     
                     setTimeout(updateStatus, 2000);
                 }} catch (e) {{ 

@@ -5,30 +5,16 @@ import os
 import shutil
 from datetime import datetime
 from typing import List, Optional
-from media_archivist.core.database import init_db, engine, MediaFile, Task
+from media_archivist.core.database import init_db, engine, MediaFile, Task, update_task_progress
 from media_archivist.agent.scanner import scan_directory
 from media_archivist.agent.hasher import hash_pending_files
+from media_archivist.agent.extractor import process_archives
 from sqlmodel import Session, select, func, col
 
 app = typer.Typer(help="MediaArchivist: Efficient media management tool.")
 
-
-def update_task_progress(
-    name: str, progress: float, message: str = None, status: str = "running"
-):
-    """Update progress for a specific task in the database."""
-    with Session(engine) as session:
-        statement = select(Task).where(Task.name == name)
-        task = session.exec(statement).first()
-        if not task:
-            task = Task(name=name)
-
-        task.progress = progress
-        task.message = message
-        task.status = status
-        task.updated_at = datetime.utcnow()
-        session.add(task)
-        session.commit()
+# Default temp directory for unpacking
+TEMP_UNPACK_DIR = os.path.join("data", "_temp_unpacked")
 
 
 def reset_stuck_hashing():
@@ -53,21 +39,95 @@ def start(
     init_db()
     reset_stuck_hashing()
 
+    with Session(engine) as session:
+        scan_task_id = None
+        if directories:
+            scan_task = Task(
+                name=f"Scan: {', '.join(directories[:2])}{'...' if len(directories) > 2 else ''}",
+                task_type="scan"
+            )
+            session.add(scan_task)
+            session.commit()
+            session.refresh(scan_task)
+            scan_task_id = scan_task.id
+
+        hash_task = Task(
+            name=f"Hashing (Session {datetime.now().strftime('%H:%M:%S')})",
+            task_type="hash"
+        )
+        session.add(hash_task)
+        session.commit()
+        session.refresh(hash_task)
+        hash_task_id = hash_task.id
+
     async def run_agent():
         tasks = []
-        if directories:
+        if directories and scan_task_id:
             print(f"Scanning directories: {', '.join(directories)}...")
-            tasks.extend([scan_directory(d) for d in directories])
+            tasks.append(asyncio.gather(*[scan_directory(d, scan_task_id) for d in directories]))
 
-        # We don't track scan_directory yet, as it's usually fast
-        tasks.append(hash_pending_files())
+        tasks.append(hash_pending_files(hash_task_id, scan_task_id))
         await asyncio.gather(*tasks)
 
     try:
         asyncio.run(run_agent())
     except KeyboardInterrupt:
-        update_task_progress("hashing", 0.0, "Interrupted by user", "failed")
+        if scan_task_id:
+            update_task_progress(scan_task_id, 0.0, 0, 0, "Interrupted", "failed")
+        update_task_progress(hash_task_id, 0.0, 0, 0, "Interrupted", "failed")
         print("\nStopping MediaArchivist agent...")
+
+
+@app.command()
+def unpack(
+    directories: List[str] = typer.Argument(..., help="Directories to search for archives."),
+    temp_dir: str = typer.Option(TEMP_UNPACK_DIR, help="Where to extract files."),
+):
+    """Find archives in directories, unpack them, and then scan/hash the contents."""
+    init_db()
+    
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+
+    with Session(engine) as session:
+        unpack_task = Task(
+            name=f"Unpack archives from: {', '.join(directories[:2])}",
+            task_type="unpack"
+        )
+        session.add(unpack_task)
+        session.commit()
+        session.refresh(unpack_task)
+        unpack_task_id = unpack_task.id
+
+    async def run_pipeline():
+        print(f"Searching and unpacking archives in: {', '.join(directories)}...")
+        # Step 1: Unpack
+        await process_archives(directories, temp_dir, unpack_task_id)
+        
+        # Step 2: Create tasks for the unpacked files
+        with Session(engine) as session:
+            scan_task = Task(name="Scan unpacked files", task_type="scan")
+            session.add(scan_task)
+            session.commit()
+            session.refresh(scan_task)
+            scan_task_id = scan_task.id
+
+            hash_task = Task(name="Hash unpacked files", task_type="hash")
+            session.add(hash_task)
+            session.commit()
+            session.refresh(hash_task)
+            hash_task_id = hash_task.id
+
+        # Step 3: Scan and Hash
+        print(f"Scanning unpacked files in {temp_dir}...")
+        await scan_directory(temp_dir, scan_task_id)
+        await hash_pending_files(hash_task_id, scan_task_id)
+        print("Unpack and ingestion pipeline completed.")
+
+    try:
+        asyncio.run(run_pipeline())
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
 
 
 @app.command()
@@ -85,7 +145,15 @@ def cleanup(
         print("--- PREVIEW MODE (DRY RUN) ---")
     else:
         print("--- ACTUAL DELETION MODE ---")
-        update_task_progress("cleanup", 0.0, "Starting cleanup...")
+        with Session(engine) as session:
+            cleanup_task = Task(
+                name=f"Cleanup ({datetime.now().strftime('%H:%M:%S')})",
+                task_type="cleanup"
+            )
+            session.add(cleanup_task)
+            session.commit()
+            session.refresh(cleanup_task)
+            task_id = cleanup_task.id
 
     with Session(engine) as session:
         statement = (
@@ -99,9 +167,7 @@ def cleanup(
         if not duplicate_hashes:
             print("No duplicates found.")
             if not is_dry_run:
-                update_task_progress(
-                    "cleanup", 100.0, "No duplicates found.", "completed"
-                )
+                update_task_progress(task_id, 100.0, 0, 0, "No duplicates found.", "completed")
             return
 
         total_hashes = len(duplicate_hashes)
@@ -128,14 +194,14 @@ def cleanup(
             if not is_dry_run:
                 progress = (idx + 1) / total_hashes * 100
                 update_task_progress(
-                    "cleanup", progress, f"Processed {idx + 1}/{total_hashes} groups."
+                    task_id, progress, idx + 1, total_hashes, f"Processed {idx + 1}/{total_hashes} groups."
                 )
 
             session.commit()
 
         if not is_dry_run:
             update_task_progress(
-                "cleanup", 100.0, "Cleanup completed successfully.", "completed"
+                task_id, 100.0, total_hashes, total_hashes, "Cleanup completed successfully.", "completed"
             )
 
 
@@ -155,7 +221,16 @@ def archive(
     is_dry_run = not no_dry_run
 
     if not is_dry_run:
-        update_task_progress("archive", 0.0, f"Starting archive to {target_path}...")
+        with Session(engine) as session:
+            archive_task = Task(
+                name=f"Archive to {os.path.basename(target_path)} ({datetime.now().strftime('%H:%M:%S')})",
+                task_type="archive"
+            )
+            session.add(archive_task)
+            session.commit()
+            session.refresh(archive_task)
+            task_id = archive_task.id
+        
         if not os.path.exists(target_path):
             os.makedirs(target_path)
 
@@ -166,7 +241,7 @@ def archive(
         if not all_files:
             print("No files to archive.")
             if not is_dry_run:
-                update_task_progress("archive", 100.0, "No files found.", "completed")
+                update_task_progress(task_id, 100.0, 0, 0, "No files found.", "completed")
             return
 
         total_files = len(all_files)
@@ -204,10 +279,13 @@ def archive(
                     new_mf = MediaFile(**old_mf_data)
                     session.add(new_mf)
                     session.commit()
+                    
                     progress = (idx + 1) / total_files * 100
                     update_task_progress(
-                        "archive",
+                        task_id,
                         progress,
+                        idx + 1,
+                        total_files,
                         f"{'Copied' if copy else 'Moved'} {idx + 1}/{total_files} files.",
                     )
                 except Exception as e:
@@ -218,7 +296,7 @@ def archive(
 
         if not is_dry_run:
             update_task_progress(
-                "archive", 100.0, "Archive completed successfully.", "completed"
+                task_id, 100.0, total_files, total_files, "Archive completed successfully.", "completed"
             )
 
 
@@ -242,9 +320,39 @@ def list_files(status: Optional[str] = None, limit: int = 100):
     """List paths."""
     init_db()
     with Session(engine) as session:
-        results = session.exec(select(MediaFile).limit(limit)).all()
+        statement = select(MediaFile)
+        if status:
+            statement = statement.where(MediaFile.status == status)
+        results = session.exec(statement.limit(limit)).all()
         for f in results:
             print(f"{f.status:<12} | {f.abs_path}")
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search pattern for file paths (case-insensitive)."),
+    status: Optional[str] = typer.Option(None, help="Filter by status."),
+    limit: int = typer.Option(100, help="Limit results."),
+):
+    """Search for files by path pattern (like grep)."""
+    init_db()
+    with Session(engine) as session:
+        # Use col().ilike for case-insensitive search if supported, 
+        # but standard SQLite LIKE is case-insensitive for ASCII.
+        statement = select(MediaFile).where(col(MediaFile.abs_path).contains(query))
+        if status:
+            statement = statement.where(MediaFile.status == status)
+
+        results = session.exec(statement.limit(limit)).all()
+        if not results:
+            print(f"No files found matching: {query}")
+            return
+
+        print(f"Found {len(results)} matches (limit {limit}):")
+        for f in results:
+            h = f.sha256_hash[:8] if f.sha256_hash else "--------"
+            print(f"{f.status:<10} | {h} | {f.abs_path}")
+
 
 
 @app.command()
@@ -265,11 +373,19 @@ def status():
                 MediaFile.status == "completed"
             )
         ).one()
+        print(f"--- Global Status ---")
         print(f"Total files: {total}")
         print(f"Completed: {done}")
-        tasks = session.exec(select(Task)).all()
+        
+        print(f"\n--- Recent Tasks ---")
+        tasks = session.exec(select(Task).order_by(Task.updated_at.desc()).limit(10)).all()
         for t in tasks:
-            print(f"Task {t.name}: {t.status} ({t.progress:.1f}%) - {t.message}")
+            t_type = (t.task_type or "unknown").upper()
+            print(f"[{t_type}] {t.name}")
+            print(f"  Status: {t.status} | Progress: {t.progress:.1f}% ({t.completed_items}/{t.total_items})")
+            print(f"  Message: {t.message}")
+            print(f"  Updated: {t.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            print("-" * 20)
 
 
 if __name__ == "__main__":
