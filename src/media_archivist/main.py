@@ -175,7 +175,21 @@ def cleanup(
             files = session.exec(
                 select(MediaFile).where(MediaFile.sha256_hash == h)
             ).all()
-            files.sort(key=lambda x: len(x.abs_path))
+            
+            # Keep the oldest file (earliest creation/birth time)
+            # If times are equal, fall back to shortest path as a tie-breaker
+            def get_file_creation_time(f):
+                try:
+                    stat = os.stat(f.abs_path)
+                    # Use st_birthtime if available (BSD, macOS, some Linux filesystems)
+                    if hasattr(stat, 'st_birthtime'):
+                        return stat.st_birthtime
+                    # Fallback to ctime (Creation time on Windows, Metadata change time on Linux)
+                    return stat.st_ctime
+                except OSError:
+                    return float('inf')
+
+            files.sort(key=lambda x: (get_file_creation_time(x), len(x.abs_path)))
             delete_files = files[1:]
 
             for df in delete_files:
@@ -269,8 +283,10 @@ def archive(
                     if not os.path.exists(dest_dir):
                         os.makedirs(dest_dir, exist_ok=True)
                     if copy:
+                        # shutil.copy2 preserves metadata (mtime, atime, etc.)
                         shutil.copy2(mf.abs_path, final_dest)
                     else:
+                        # shutil.move preserves attributes on the same filesystem
                         shutil.move(mf.abs_path, final_dest)
                     old_mf_data = mf.model_dump()
                     session.delete(mf)
